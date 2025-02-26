@@ -6,10 +6,15 @@ prolog.consult("spell_logic.pl") #consulto el archivo de prolog
 prolog.retract("warrior(you, Health)")
 #resetear vida de los jugadores
 prolog.retract("warrior(boss, Health)")
-prolog.assertz("warrior(you, 100)")
-prolog.assertz("warrior(boss, 100)")
+prolog.retractall("mana(you, _)")
+prolog.assertz("mana(you, 100)")
+
+prolog.assertz("warrior(you, 200)")
+prolog.assertz("warrior(boss, 200)")
+#prolog.assertz("mana(you, 100)")
 #inicializar cooldowns
 list(prolog.query("initialize_cooldowns."))
+list(prolog.query("initialize_cooldowns_berserk."))
 
 trap_dictionary = {"you": [], "boss": []} #diccionario de trampas, se guardan en el formato {victima: letra}
 disable_dictionary = {"you": [], "boss": []} #diccionario letras desactivadas, se guardan en el formato {victima: letra}
@@ -21,11 +26,9 @@ def update_letter_count(string):
             mostCommonLetters[char] += 1
 
 def format_to_print(string):
-    #summon_frog -> SUMMON FROG
     return " ".join(string.split("_")).upper()
 
 def format_to_prolog(string):
-    #SUMMON FROG -> summon_frog
     return string.replace(" ", "_").lower()
 
 def first_turn():
@@ -63,7 +66,8 @@ def load_spell_lists(user, visible_spells, secret_spells, traps):
         traps.append(format_to_print(trap["Name"]))
 
 def load_cooldowns(user, cooldowns):
-    spells = list(prolog.query("spell(Name)"))
+    spells = list(prolog.query("spell(Name)")) + list(prolog.query("spell_berserk(Name)"))
+    print(list(prolog.query(f"current_cooldown(boss, berserk_fireball, CD)")))
     for spell in spells:
         spell_data = spell["Name"]
         cooldown = list(prolog.query(f"current_cooldown({user}, {spell_data}, CD)"))[0]["CD"]
@@ -73,17 +77,16 @@ def update_cooldown(user, spell_data):
     list(prolog.query(f"update_single_cooldown({user}, {spell_data})."))
 
 def can_cast_spell(user, spell_data):
-    return list(prolog.query(f"can_cast_spell({user}, {spell_data})"))
+    if user == "you":
+        return list(prolog.query(f"can_cast_spell({user}, {spell_data})")) and list(prolog.query(f"has_mana({user}, {spell_data})"))
+    else:
+        return list(prolog.query(f"can_cast_spell({user}, {spell_data})"))
 
 def choose_letter():
     sorted_letters = sorted(mostCommonLetters.items(), key=lambda item: item[1], reverse=True)
-    #print(mostCommonLetters)
     for letter, _ in sorted_letters:
         if letter not in trap_dictionary["you"] and letter not in disable_dictionary["you"]:
-            #print(f"Choose {letter} to cast a spell with this letter.")
             return letter
-    
-    # return chr(randint(97, 122))  # if all letters are used, choose a random letter
 
 def is_valid_spell(spell_data, caster):
     for letter in disable_dictionary[caster]:
@@ -107,17 +110,43 @@ def handle_trap(spell_data, caster, target):
         return True
     return False
 
+def update_mana(caster, spell_data):
+    if caster == "you":
+        mana = list(prolog.query("mana(you, Mana)"))[0]["Mana"]
+        mana_cost = list(prolog.query(f"mana_cost({spell_data}, Cost)"))[0]["Cost"]
+        prolog.retract("mana(you, _)")
+        prolog.assertz(f"mana(you, {mana - mana_cost})")
+
+def is_counter_spell_on(spell_data, caster):
+    opponent = "boss" if caster == "you" else "you"
+
+    # Si el enemigo tiene activo un counter_spell, lo detiene y le hace daño
+    counter_check = list(prolog.query(f"secret({opponent}, counter_spell)"))
+    if counter_check:
+        list(prolog.query(f"counter_spell({opponent}, {caster})"))
+        print(f"{opponent} bloqueó el hechizo con un Counter Spell y {caster} recibió daño!")
+        return True  # El hechizo del caster no se ejecuta
+    return False
+
 def handle_cast(spell_data, caster):
     if not is_valid_spell(spell_data, caster):
-        print(f"{format_to_print(spell_data)} is on cooldown or contains a disabled letter!")
+        if caster == "you":
+            if list(prolog.query(f"has_mana({caster}, {spell_data})")):
+                print(f"{format_to_print(spell_data)} is on cooldown or contains a disabled letter!")
+            else:
+                print(f"You don't have enough mana to cast {format_to_print(spell_data)}!")
         return False
     check_trap(spell_data, caster)
     if list(prolog.query(f"warrior({caster}, Health)"))[0]["Health"] <= 0:
+        return False
+    if is_counter_spell_on(spell_data, caster):
+        print (f"{format_to_print(spell_data)} was countered!")
         return False
     cast_spell(spell_data, caster)
     if caster == "you":
         update_letter_count(spell_data)
     update_cooldown(caster, spell_data)
+    update_mana(caster, spell_data)
     return True
 
 def user_turn():
@@ -130,15 +159,20 @@ def user_turn():
     load_cooldowns("you", cooldowns)
     valid = False
     while not valid:
-        #print("\nCAST-------------------------------------------------------------------")
         print("\nKnown spells:", [f"{spell} (CD: {cooldowns[format_to_prolog(spell)]})" for spell in visible_spells])
         print("Traps:", traps)
         print("Type HELP to check a spell's description or SKIP to skip your turn.\n")
+        print('Current Mana:', list(prolog.query("mana(you, Mana)"))[0]["Mana"])
         spell = input().upper()
         spell_data = format_to_prolog(spell)
         if spell == "HELP":
             help_handler(visible_spells, secret_spells, traps)
         elif spell == "SKIP":
+            #refills mana
+            max_mana = list(prolog.query("max_mana(you, X)"))[0]["X"]
+            prolog.retract("mana(you, _)")
+            prolog.assertz(f"mana(you, {max_mana})")
+
             print("Skipping turn...\n")
             valid = True
         elif spell in traps:
@@ -209,6 +243,11 @@ def cast_spell(spell_data,caster):
     target_list = [target["Target"] for target in prolog.query(f"target({spell_data}, {caster}, Target)")]
     print(f"\n{format_to_print(caster)} casted {format_to_print(spell_data)}")
     # check si es crítico
+    if spell_data == "counter_spell":
+        prolog.assertz(f"secret({caster}, counter_spell)")
+        print(f"{caster} lanzó Counter Spell! Si el enemigo lanza un hechizo, será bloqueado y recibirá daño.")
+        return True
+
     crit_modifier = 1
     crit_chance = list(prolog.query(f"crit_chance({spell_data}, Chance)"))[0]["Chance"]
     if randint(0, 100) < crit_chance:
@@ -235,7 +274,7 @@ def cast_spell(spell_data,caster):
             prolog.assertz(f"warrior({target}, {current_health - damage})")
             print(f"Dealt {damage} damage to {format_to_print(target)}")
         #imprimo resultado
-        print(f"{format_to_print(target)} health: {list(prolog.query(f'warrior({target}, Health)'))[0]['Health']}\n")
+
         if list(prolog.query(f"warrior({target}, Health)"))[0]["Health"] < 0:
             print(f"O V E R K I L L")
     prolog.query(f"update_single_cooldown({caster}, {spell_data})")
@@ -244,8 +283,8 @@ def cast_trap(trap_data, caster, letter):
     target = list(prolog.query(f"target({trap_data}, {caster}, Target)"))[0]["Target"]
     print(f"{format_to_print(caster)} casted {format_to_print(trap_data)} on letter {letter.upper()}\n")
 
+
 def check_trap(spell_data, caster):
-    #spell_data = format_to_prolog(spell)
     #check si el spell tiene una letra trappeada
     for trap in trap_dictionary[caster]:
         if trap in spell_data: #si el spell tiene una letra trappeada
@@ -262,29 +301,51 @@ def check_trap(spell_data, caster):
             if list(prolog.query(f"warrior({caster}, Health)"))[0]["Health"] <= 0:
                 print(f"Did {caster} just die to a trap?\n")
 
+def behead(caster,target):
+    berserk_mode = int(bool(list(prolog.query("berserker_mode(boss)"))))
+    if caster == "boss" and berserk_mode:
+        spells = list(prolog.query("spell_berserk(Name)"))
+    else:
+        spells = list(prolog.query("spell(Name)"))
+        #remove one shots and heal
+        spells.remove({"Name": "summon_dragon"})
+        spells.remove({"Name": "heal"})
+        spells.remove({"Name": "nuke"})
+
+    for spell in spells:
+        spell_data = spell["Name"]
+        if is_valid_spell(spell_data, caster):
+            if list(prolog.query(f"damage_range({spell_data}, Min, Max)"))[0]["Min"] >= list(prolog.query(f"warrior({target}, Health)"))[0]["Health"]:
+                return True
+    return False
+
 def boss_turn(show_boss_logic):
     print("----BOSS TURN-------------------------------------------------------------------")
-    is_1_hp = int(bool(list(prolog.query("is_one_hp(boss)"))))
-    can_die = int(bool(list(prolog.query("can_die(boss)"))))
-    at_trap_limit = int(len(trap_dictionary["you"]) == 2)
-    has_disabled = int(len(disable_dictionary["you"]) == 1)
-
     #is boss one hp?
     is_1_hp = int(bool(list(prolog.query("is_one_hp(boss)"))))
     #can boss die to any spells next turn?
-    can_die = int(bool(list(prolog.query("can_die(boss)"))))
+    can_die = int(bool(behead("you", "boss")))
     #does the boss have 2 active traps?
     at_trap_limit = int(len(trap_dictionary["you"]) == 2)
     #has the boss disabled a letter already?
     has_disabled = int(len(disable_dictionary["you"]) == 1)
-    possible_actions = list(prolog.query(f"boss_choice(Action,{is_1_hp}, {can_die}, {at_trap_limit}, {has_disabled})"))
+    #can the boss kill warrior in one turn?
+    can_kill = int(bool(behead("boss", "you")))
+    #berserker mode implies no cooldowns and double damage
+    berserker_mode = int(bool(list(prolog.query("berserker_mode(boss)"))))
+
+    possible_actions = list(prolog.query(f"boss_choice(Action,{is_1_hp}, {can_die}, {at_trap_limit}, {has_disabled}, {can_kill}, {berserker_mode})"))
+    #print("possible actions:", possible_actions)
+    cooldowns = list(prolog.query("current_cooldown(boss, Spell, CD)"))
+    #print("cooldowns:", cooldowns)
     if show_boss_logic:
         print(f"Boss is at 1 hp: {is_1_hp}")
         print(f"Boss can die next turn: {can_die}")
         print(f"Boss is at trap limit: {at_trap_limit}")
         print(f"Boss has disabled a letter: {has_disabled}")
+        print(f"Boss can kill warrior: {can_kill}")
+        print(f"Boss is in berserker mode: {berserker_mode}")
         print("BOSS' CHOICE")
-        #print(possible_actions[0])
     
     spell_data = None
     for action in possible_actions:
@@ -294,6 +355,7 @@ def boss_turn(show_boss_logic):
         elif is_valid_spell(action['Action'], "boss"):
             spell_data = action['Action']
             break
+    
     if spell_data is None:
         print("Boss gave up....\n")
         return
@@ -313,13 +375,28 @@ def main():
     warriors = list(prolog.query(f"warrior(Warrior, Health)")) #actualizo vida de los jugadores
     while warriors[0]["Health"] > 0 and warriors[1]["Health"] > 0:
         boss_turn(show_boss_logic)
-        warriors = list(prolog.query(f"warrior(Warrior, Health)")) #actualizo vida de los jugadores
+        
+        warriors = sorted(
+            list(prolog.query(f"warrior(Warrior, Health)")),
+            key=lambda x: x["Warrior"]  # Ensure consistent order
+        )
+        prolog.retractall("secret(counter_spell)")
+
+        print("-------------------------------------------------------------------")
+        print("Current health:")
+        print("You:", warriors[1]["Health"])
+        print("Boss:", warriors[0]["Health"])
+        print("-------------------------------------------------------------------")
         print("Trapped keys:", trap_dictionary)
         print("Disabled keys:", disable_dictionary)
         print("\n")
+
+
         list(prolog.query("update_cooldowns."))
         if warriors[0]["Health"] > 0 and warriors[1]["Health"] > 0:
             user_turn()
-            warriors = list(prolog.query(f"warrior(Warrior, Health)")) #actualizo vida de los jugadores
+            #retracts all counterSpelss after the user's turn
+            
+            warriors = list(prolog.query(f"warrior(Warrior, Health)"))
     end_game()
 main()
