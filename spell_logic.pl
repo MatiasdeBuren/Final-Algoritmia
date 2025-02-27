@@ -1,5 +1,6 @@
 :- dynamic warrior/2.
 :- dynamic mana/2.
+:- dynamic max_turns/1.
 :- dynamic opponent/2.
 :- dynamic spell/1.
 :- dynamic description/2.
@@ -23,7 +24,7 @@ warrior(you,max_health(you)).
 warrior(boss,max_health(boss)).
 opponent(you,boss).
 opponent(boss,you).
-
+max_turns(8).
 
 
 
@@ -41,6 +42,7 @@ spell(summon_dragon).
 spell(counter_spell).
 spell(nuke).
 spell(heal).
+spell(game_over).
 
 
 spell_berserk(berserk_fireball).
@@ -60,6 +62,7 @@ description(nuke, 'Uh oh! You shouldnt use this.').
 description(heal, 'Heal yourself a little bit.').
 description(trap_key, 'Lays a trap on one of your opponents keys.\nOnly two traps can be active at once.').
 description(disable_key, 'Disables one of your opponents keys!.\nOnly one key can be disabled at once.').
+description(game_over, 'One shot based on amount of played turns').
 
 damage_range(fireball, 20, 50).
 damage_range(ice, 15, 40).
@@ -68,6 +71,7 @@ damage_range(counter_spell, 10, 30).
 damage_range(summon_frog, 5, 15).
 damage_range(summon_dragon, 145, 145).
 damage_range(nuke, 5000, 10000).
+damage_range(game_over, 999, 9999).
 damage_range(heal, 10, 15).
 damage_range(trap_key, 15,15).
 damage_range(disable_key, 0, 0).
@@ -84,6 +88,7 @@ crit_chance(counter_spell, 20).
 crit_chance(summon_frog, 10).
 crit_chance(summon_dragon, 0).
 crit_chance(nuke, 100).
+crit_chance(game_over, 100).
 crit_chance(heal, 15).
 crit_chance(berserk_fireball, 20).
 crit_chance(berserk_ice, 10).
@@ -98,6 +103,7 @@ mana_cost(counter_spell, 10).
 mana_cost(summon_frog, 10).
 mana_cost(summon_dragon, 90).
 mana_cost(heal, 20).
+mana_cost(game_over, 99999).
 
 target(Spell, Caster, Opponent) :- 
     (spell(Spell) ; spell_berserk(Spell)), 
@@ -128,20 +134,22 @@ berserker_mode(Warrior) :-
     max_health(Warrior, Max_HP),
     HP < Max_HP * 0.31.
 
-boss_choice(nuke, 1, _, _, _, 0, _).
+boss_choice(nuke, 1, _, _, _, _, _, _).
 
-boss_choice(heal, 0, 1, _, _, 0, _).
+boss_choice(game_over, _, _, _, _, _, _, 1).
 
-boss_choice(trap_key, 0, 0, 0, _, 0, 0). 
+boss_choice(heal, 0, 1, _, _, 0, _, 0).
 
-boss_choice(disable_key, 0, _, _, 0, 0, 0).
+boss_choice(trap_key, 0, 0, 0, _, 0, 0, 0). 
 
-boss_choice(Spell, 0, _, _, _, 0, _) :-
+boss_choice(disable_key, 0, _, _, 0, 0, 0, 0).
+
+boss_choice(Spell, 0, _, _, _, 0, _, 0) :-
     (berserker_mode(boss) -> spell_berserk(Spell) ; spell(Spell)),
     Spell \= nuke,
     Spell \= heal.
 
-boss_choice(Spell, 0, _, _, _, 1, _) :- 
+boss_choice(Spell, 0, _, _, _, 1, _, 0) :- 
     (berserker_mode(boss) -> spell_berserk(Spell) ; spell(Spell)),
     Spell \= nuke,
     Spell \= heal.

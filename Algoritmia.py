@@ -8,7 +8,7 @@ prolog.retract("warrior(you, Health)")
 prolog.retract("warrior(boss, Health)")
 prolog.retractall("mana(you, _)")
 prolog.assertz("mana(you, 100)")
-
+prolog.assertz("max_turns(8)")
 prolog.assertz("warrior(you, 200)")
 prolog.assertz("warrior(boss, 200)")
 #prolog.assertz("mana(you, 100)")
@@ -110,6 +110,14 @@ def handle_trap(spell_data, caster, target):
         return True
     return False
 
+def update_max_turns():
+    max_turns = list(prolog.query("max_turns(Max)"))[0]["Max"]
+    prolog.retractall("max_turns(_)")
+    prolog.assertz(f"max_turns({max_turns - 1})")
+    print("Actualizando turnos restantes...")
+    updated_turns = list(prolog.query("max_turns(Max)"))[0]["Max"]
+    print(f"Turnos restantes: {updated_turns}")
+
 def update_mana(caster, spell_data):
     if caster == "you":
         mana = list(prolog.query("mana(you, Mana)"))[0]["Mana"]
@@ -172,7 +180,6 @@ def user_turn():
             max_mana = list(prolog.query("max_mana(you, X)"))[0]["X"]
             prolog.retract("mana(you, _)")
             prolog.assertz(f"mana(you, {max_mana})")
-
             print("Skipping turn...\n")
             valid = True
         elif spell in traps:
@@ -333,9 +340,11 @@ def boss_turn(show_boss_logic):
     can_kill = int(bool(behead("boss", "you")))
     #berserker mode implies no cooldowns and double damage
     berserker_mode = int(bool(list(prolog.query("berserker_mode(boss)"))))
+    #boss can end fight based on max turns
+    max_remaining_turns = list(prolog.query("max_turns(Max)"))[0]["Max"]
+    max_turns_passed = int(max_remaining_turns <= 0)
 
-    possible_actions = list(prolog.query(f"boss_choice(Action,{is_1_hp}, {can_die}, {at_trap_limit}, {has_disabled}, {can_kill}, {berserker_mode})"))
-    #print("possible actions:", possible_actions)
+    possible_actions = list(prolog.query(f"boss_choice(Action,{is_1_hp}, {can_die}, {at_trap_limit}, {has_disabled}, {can_kill}, {berserker_mode}, {max_turns_passed})"))
     cooldowns = list(prolog.query("current_cooldown(boss, Spell, CD)"))
     #print("cooldowns:", cooldowns)
     if show_boss_logic:
@@ -345,6 +354,7 @@ def boss_turn(show_boss_logic):
         print(f"Boss has disabled a letter: {has_disabled}")
         print(f"Boss can kill warrior: {can_kill}")
         print(f"Boss is in berserker mode: {berserker_mode}")
+        print(f"Boss can end fight based on max turns: {max_turns_passed}")
         print("BOSS' CHOICE")
     
     spell_data = None
@@ -372,10 +382,11 @@ def main():
         show_boss_logic = True
 
     first_turn()
+    update_max_turns()
     warriors = list(prolog.query(f"warrior(Warrior, Health)")) #actualizo vida de los jugadores
     while warriors[0]["Health"] > 0 and warriors[1]["Health"] > 0:
         boss_turn(show_boss_logic)
-        
+        update_max_turns()
         warriors = sorted(
             list(prolog.query(f"warrior(Warrior, Health)")),
             key=lambda x: x["Warrior"]  # Ensure consistent order
@@ -389,12 +400,14 @@ def main():
         print("-------------------------------------------------------------------")
         print("Trapped keys:", trap_dictionary)
         print("Disabled keys:", disable_dictionary)
+        print("Passed turns:", 8 - list(prolog.query("max_turns(Max)"))[0]["Max"])
         print("\n")
 
 
         list(prolog.query("update_cooldowns."))
         if warriors[0]["Health"] > 0 and warriors[1]["Health"] > 0:
             user_turn()
+            update_max_turns()
             #retracts all counterSpelss after the user's turn
             
             warriors = list(prolog.query(f"warrior(Warrior, Health)"))
